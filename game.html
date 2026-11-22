@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Star Catcher — built from one prompt</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: #0b1026; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    color: #f4f6ff; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 10px;
+    overflow: hidden; user-select: none;
+  }
+  h1 { font-size: 28px; letter-spacing: 2px; }
+  h1 span { color: #ffd94d; }
+  #hud {
+    display: flex; gap: 28px; font-size: 18px; font-weight: 600;
+  }
+  #hud b { color: #ffd94d; }
+  canvas {
+    background: linear-gradient(#131a3d, #0b1026);
+    border: 2px solid #2c3a6e; border-radius: 12px;
+    box-shadow: 0 0 40px rgba(80, 110, 255, .25);
+    cursor: none; touch-action: none;
+  }
+  #msg {
+    position: absolute; inset: 0; display: none;
+    align-items: center; justify-content: center;
+    flex-direction: column; gap: 12px; pointer-events: none;
+  }
+  #msg.show { display: flex; }
+  #msg .big { font-size: 44px; font-weight: 800; color: #ffd94d;
+    text-shadow: 0 3px 0 #7a4d00; }
+  #msg .sub { font-size: 18px; color: #c9d4ff; }
+  #wrap { position: relative; }
+  button {
+    pointer-events: auto; font: inherit; font-weight: 700;
+    background: #ffd94d; color: #241a00; border: 0; border-radius: 999px;
+    padding: 10px 26px; cursor: pointer;
+  }
+  button:hover { background: #ffe47a; }
+  p.hint { color: #8fa0d8; font-size: 14px; }
+  p.credit { color: #5b6a9e; font-size: 12px; }
+  p.credit a { color: #8fa0d8; }
+</style>
+</head>
+<body>
+  <h1>⭐ STAR <span>CATCHER</span></h1>
+  <div id="hud">
+    <span>Score <b id="score">0</b></span>
+    <span>Best streak <b id="streak">0</b></span>
+    <span>Missed <b id="missed">0</b>/3</span>
+    <span>Time <b id="time">60</b>s</span>
+  </div>
+  <div id="wrap">
+    <canvas id="game" width="640" height="420"></canvas>
+    <div id="msg">
+      <div class="big" id="msgTitle"></div>
+      <div class="sub" id="msgSub"></div>
+      <button id="again">Play again</button>
+    </div>
+  </div>
+  <p class="hint">Move with your mouse or ← → arrow keys. Catch the falling stars!</p>
+  <p class="credit">Built from one prompt by an AI agent for a bounty on
+    <a href="https://make.fun">make.fun</a></p>
+<script>
+"use strict";
+// STAR CATCHER — one prompt: "Build me a tiny browser game: catch the falling stars."
+const cv = document.getElementById("game");
+const cx = cv.getContext("2d");
+const W = cv.width, H = cv.height;
+
+const PADDLE = { w: 96, h: 14, y: H - 26, x: W / 2 - 48, speed: 9 };
+const GRAVITY = 0.12;          // stars accelerate as they fall
+const SPAWN_EVERY = 42;        // frames between spawns (shrinks as you score)
+const ROUND_SECONDS = 60;
+
+let stars = [];                // {x, y, vy, r, hue, spin, points}
+let score = 0, bestStreak = 0, streak = 0, missed = 0;
+let timeLeft = ROUND_SECONDS, frame = 0, over = false, started = false;
+let keys = {};
+
+function el(id) { return document.getElementById(id); }
+function syncHud() {
+  el("score").textContent = score;
+  el("streak").textContent = bestStreak;
+  el("missed").textContent = missed;
+  el("time").textContent = Math.ceil(timeLeft);
+}
+
+function spawnStar() {
+  const r = 11 + Math.random() * 7;
+  stars.push({
+    x: 20 + Math.random() * (W - 40),
+    y: -20, vy: 1.6 + Math.random() * 1.4 + score * 0.02,
+    r, hue: 42 + Math.random() * 14, spin: Math.random() * Math.PI * 2,
+    points: r < 14 ? 3 : 1,      // small stars are worth 3
+  });
+}
+
+function drawStar(s) {
+  cx.save();
+  cx.translate(s.x, s.y);
+  cx.rotate(s.spin);
+  cx.fillStyle = `hsl(${s.hue} 100% 62%)`;
+  cx.shadowColor = "#ffd94d"; cx.shadowBlur = 14;
+  cx.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const rad = i % 2 === 0 ? s.r : s.r * 0.45;
+    const a = -Math.PI / 2 + (i * Math.PI) / 5;
+    cx[i === 0 ? "moveTo" : "lineTo"](Math.cos(a) * rad, Math.sin(a) * rad);
+  }
+  cx.closePath(); cx.fill();
+  cx.restore();
+}
+
+function drawPaddle() {
+  const g = cx.createLinearGradient(PADDLE.x, 0, PADDLE.x + PADDLE.w, 0);
+  g.addColorStop(0, "#7aa2ff"); g.addColorStop(1, "#c41c83");
+  cx.fillStyle = g;
+  cx.beginPath();
+  cx.roundRect(PADDLE.x, PADDLE.y, PADDLE.w, PADDLE.h, 7);
+  cx.fill();
+}
+
+function endRound(title, sub) {
+  over = true;
+  el("msgTitle").textContent = title;
+  el("msgSub").textContent = sub;
+  el("msg").classList.add("show");
+}
+
+function reset() {
+  stars = []; score = 0; bestStreak = 0; streak = 0; missed = 0;
+  timeLeft = ROUND_SECONDS; frame = 0; over = false; started = true;
+  PADDLE.x = W / 2 - PADDLE.w / 2;
+  el("msg").classList.remove("show");
+  syncHud();
+}
+
+function tick() {
+  if (!over) {
+    frame++;
+    // paddle: keys first, mouse sets target directly (see listeners below)
+    if (keys.ArrowLeft)  PADDLE.x -= PADDLE.speed;
+    if (keys.ArrowRight) PADDLE.x += PADDLE.speed;
+    PADDLE.x = Math.max(0, Math.min(W - PADDLE.w, PADDLE.x));
+
+    const every = Math.max(18, SPAWN_EVERY - Math.floor(score / 5));
+    if (frame % every === 0) spawnStar();
+
+    for (let i = stars.length - 1; i >= 0; i--) {
+      const s = stars[i];
+      s.vy += GRAVITY * 0.06; s.y += s.vy; s.spin += 0.02;
+      const caught =
+        s.y + s.r >= PADDLE.y && s.y - s.r <= PADDLE.y + PADDLE.h &&
+        s.x >= PADDLE.x - 4 && s.x <= PADDLE.x + PADDLE.w + 4;
+      if (caught) {
+        score += s.points; streak++;
+        bestStreak = Math.max(bestStreak, streak);
+        stars.splice(i, 1);
+      } else if (s.y - s.r > H) {
+        stars.splice(i, 1);
+        missed++; streak = 0;
+        if (missed >= 3) endRound("GAME OVER", `You caught ${score} points of stardust.`);
+      }
+    }
+
+    timeLeft -= 1 / 60;
+    if (timeLeft <= 0) {
+      timeLeft = 0;
+      endRound("TIME UP — YOU WIN!", `Final score: ${score} · best streak: ${bestStreak}`);
+    }
+    syncHud();
+  }
+
+  // ---- draw ----
+  cx.clearRect(0, 0, W, H);
+  // faint stars in the sky, for depth
+  cx.fillStyle = "rgba(255,255,255,.5)";
+  for (let i = 0; i < 40; i++) {
+    const sx = (i * 97) % W, sy = (i * 61) % H;
+    cx.fillRect(sx, sy, 2, 2);
+  }
+  stars.forEach(drawStar);
+  drawPaddle();
+  requestAnimationFrame(tick);
+}
+
+cv.addEventListener("mousemove", (e) => {
+  const r = cv.getBoundingClientRect();
+  PADDLE.x = ((e.clientX - r.left) / r.width) * W - PADDLE.w / 2;
+});
+cv.addEventListener("touchmove", (e) => {
+  e.preventDefault();
+  const r = cv.getBoundingClientRect();
+  PADDLE.x = ((e.touches[0].clientX - r.left) / r.width) * W - PADDLE.w / 2;
+}, { passive: false });
+window.addEventListener("keydown", (e) => { keys[e.key] = true; });
+window.addEventListener("keyup", (e) => { keys[e.key] = false; });
+el("again").addEventListener("click", reset);
+
+syncHud();
+reset();           // start the first round right away
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>
