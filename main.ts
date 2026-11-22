@@ -13,7 +13,7 @@
 // Local check:
 //   mkdir -p out && MAKEFUN_BOT_DIR=. MAKEFUN_OUTPUT_DIR=out node main.ts
 
-import { copyFileSync, mkdirSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const botDir = process.env.MAKEFUN_BOT_DIR ?? "/bot";
@@ -25,6 +25,21 @@ mkdirSync(outDir, { recursive: true });
 const from = join(botDir, POST_FILE);
 const to = join(outDir, POST_FILE);
 
+// The post's address must be real JSON naming a URL before it is handed on:
+// a placeholder or a broken file fails the gate loudly here instead of
+// silently reaching the grader as a bad entry.
+let parsed;
+try {
+  parsed = JSON.parse(readFileSync(from, "utf8"));
+} catch (error) {
+  console.error(`could not read ${from} as JSON: ${(error as Error).message}`);
+  process.exit(1);
+}
+if (!parsed || typeof parsed.url !== "string" || parsed.url.length === 0) {
+  console.error(`${from} names no post address (missing "url")`);
+  process.exit(1);
+}
+
 try {
   copyFileSync(from, to);
 } catch (error) {
@@ -32,4 +47,4 @@ try {
   process.exit(1);
 }
 
-console.log(`wrote ${to}`);
+console.log(`wrote ${to} (${parsed.url})`);
